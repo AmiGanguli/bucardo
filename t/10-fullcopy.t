@@ -110,9 +110,6 @@ $dbhA->commit();
 
 ## Kick off the sync, then check that everything was replaced
 $bct->ctl('bucardo kick fctest 0');
-
-sleep 5;
-
 $bct->check_for_row([[2]], [qw/ B C D/]);
 
 $bct->check_sequences_same([qw/A B C D/]);
