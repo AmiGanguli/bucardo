@@ -4084,89 +4084,89 @@ sub start_kid {
                     $self->glog('Conflicts have been resolved', LOG_NORMAL);
 
                 } ## end if have conflicts
+        ## Can it do truncate?
+        $d->{does_truncate} = 0;
 
-                ## Create filehandles for any flatfile databases
-                for my $dbname (keys %{ $sync->{db} }) {
+        ## Does it support asynchronous queries well?
+        $d->{does_async} = 0;
 
-                    my $d = $sync->{db}{$dbname};
+        ## Does it have good support for ANY()?
+        $d->{does_ANY_clause} = 0;
 
-                    next if $d->{dbtype} !~ /flat/o;
+        ## Can it do savepoints (and roll them back)?
+        $d->{does_savepoints} = 0;
 
-                    ## Figure out and set the filename
-                    my $date = strftime('%Y%m%d_%H%M%S', localtime());
-                    $d->{filename} = "$config{flatfile_dir}/bucardo.flatfile.$self->{syncname}.$date.sql";
+        ## Does it support truncate cascade?
+        $d->{does_cascade} = 0;
 
-                    ## Does this already exist? It's possible we got so quick the old one exists
-                    ## Since we want the names to be unique, come up with a new name
-                    if (-e $d->{filename}) {
-                        my $tmpfile;
-                        my $extension = 1;
-                        {
-                            $tmpfile = "$d->{filename}.$extension";
-                            last if -e $tmpfile;
-                            $extension++;
-                            redo;
-                        }
-                        $d->{filename} = $tmpfile;
-                    }
-                    $d->{filename} .= '.tmp';
+        ## Does it support a LIMIT clause?
+        $d->{does_limit} = 0;
 
-                    open $d->{filehandle}, '>>', $d->{filename}
-                        or die qq{Could not open flatfile "$d->{filename}": $!\n};
-                }
+        ## Can it be queried?
+        $d->{does_append_only} = 0;
 
-                ## Populate the semaphore table if the setting is non-empty
-                if ($config{semaphore_table}) {
-                    my $tname = $config{semaphore_table};
-                    for my $dbname (@dbs_connectable) {
+        ## List of tables in this database that need makedelta inserts
+        $d->{does_makedelta} = {};
 
-                        my $d = $sync->{db}{$dbname};
+        ## Does it have that annoying timestamp +dd bug?
+        $d->{has_mysql_timestamp_issue} = 0;
 
-                        if ($d->{dbtype} eq 'mongo') {
-                            $self->update_mongo_status( $d, $syncname, $tname, 'started' );
-                        }
-                    }
-                }
+        ## Start clumping into groups and adjust the attributes
 
-                ## At this point, %deltabin should contain a single copy of each primary key
-                ## It may even be empty if we are truncating
+        ## Postgres
+        if ('postgres' eq $d->{dbtype}) {
+            push @dbs_postgres => $dbname;
+            $d->{does_sql}        = 1;
+            $d->{does_truncate}   = 1;
+            $d->{does_savepoints} = 1;
+            $d->{does_cascade}    = 1;
+            $d->{does_limit}      = 1;
+            $d->{does_async}      = 1;
+            $d->{does_ANY_clause} = 1;
+        }
 
-                ## We need to figure out how many sources we have for some later optimizations
-                my $numsources = keys %deltabin;
+        ## Drizzle
+        if ('drizzle' eq $d->{dbtype}) {
+            push @dbs_drizzle => $dbname;
+            $d->{does_sql}        = 1;
+            $d->{does_truncate}   = 1;
+            $d->{does_savepoints} = 1;
+            $d->{does_limit}      = 1;
+            $d->{has_mysql_timestamp_issue} = 1;
+        }
 
-                ## Figure out which databases are getting written to
-                ## If there is only one source, then it will *not* get written to
-                ## If there is more than one source, then everyone gets written to!
-                for my $dbname (keys %{ $sync->{db} }) {
+        ## MongoDB
+        if ('mongo' eq $d->{dbtype}) {
+            push @dbs_mongo => $dbname;
+        }
 
-                    my $d = $sync->{db}{$dbname};
+        ## MySQL (and MariaDB)
+        if ('mysql' eq $d->{dbtype} or 'mariadb' eq $d->{dbtype}) {
+            push @dbs_mysql => $dbname;
+            $d->{does_sql}        = 1;
+            $d->{does_truncate}   = 1;
+            $d->{does_savepoints} = 1;
+            $d->{does_limit}      = 1;
+            $d->{has_mysql_timestamp_issue} = 1;
+        }
 
-                    ## Again: everyone is written to unless there is a single source
-                    ## A truncation source may have an empty deltabin, but it will exist
-                    $d->{writtento} = (1==$numsources and exists $deltabin{$dbname}) ? 0 : 1;
-                    next if ! $d->{writtento};
+        ## Firebird
+        if ('firebird' eq $d->{dbtype}) {
+            push @dbs_firebird => $dbname;
+            $d->{does_sql}        = 1;
+            $d->{does_truncate}   = 1;
+            $d->{does_savepoints} = 1;
+            $d->{does_limit}      = 1;
+            $d->{has_mysql_timestamp_issue} = 1;
+        }
 
-                    ## Should we use the stage table for this database?
-                    $d->{trackstage} = ($numsources > 1 and exists $deltabin{$dbname}) ? 1 : 0;
-
-                    ## Disable triggers as needed
-                    $self->disable_triggers($sync, $d);
-
-                    ## Disable indexes as needed (will be rebuilt after data is copied)
-                    $self->disable_indexes($sync, $d, $g);
-
-                } ## end setting up each database
-
-
-                ## This is where we want to 'rewind' to on a handled exception
-              PUSH_SAVEPOINT: {
-
-                    $delta_attempts++;
-
-                    ## From here on out, we're making changes that may trigger an exception
-                    ## Thus, if we have exception handling code, we create savepoints to rollback to
-                    if ($g->{has_exception_code}) {
-                        for my $dbname (keys %{ $sync->{db} }) {
+        ## Oracle
+        if ('oracle' eq $d->{dbtype}) {
+            push @dbs_oracle => $dbname;
+            $d->{does_sql}        = 1;
+            $d->{does_truncate}   = 1;
+            $d->{does_savepoints} = 1;
+        }
 
                             my $d = $sync->{db}{$dbname};
 
@@ -8953,6 +8953,7 @@ sub adjust_sequence {
             $self->glog("Set sequence $dbname.$ST to $sourceinfo->{last_value} (is_called to $sourceinfo->{is_called})", LOG_DEBUG);
             my $newname = $g->{newname}{$syncname}{$dbname};
             $SQL = qq{SELECT setval('$newname', $sourceinfo->{last_value}, '$sourceinfo->{is_called}')};
+            #$SQL = qq{SELECT setval('$newname', 6666, '$sourceinfo->{is_called}')};
             $d->{dbh}->do($SQL);
             $changes++;
         }
@@ -8994,6 +8995,7 @@ sub adjust_sequence {
             $SQL .= join ' ' => @alter;
             $self->glog("Running on target $dbname: $SQL", LOG_DEBUG);
             $d->{dbh}->do($SQL);
+            #$d->{dbh}->do($SQL) or $self.glog("ERROR altering sequence " . $d->{dbh}->err() . " " . $d->{dbh}->errstr());
         }
 
     } ## end each database
@@ -9157,117 +9159,117 @@ sub truncate_table {
     my $SQL;
 
     ## Override any existing handlers so we can cleanly catch the eval
-    local $SIG{__DIE__} = sub {};
+                                        $dbname,
+                                            $scol->{atthasdef} ? 'has none'             : 'does';
+                    $self->glog("Warning: $msg", LOG_WARN);
+                    warn $msg;
+                }
 
-    my $tablename = exists $Table->{tablename} ? $Table->{tablename} : "$Table->{safeschema}.$Table->{safetable}";
+                ## Fatal in strict mode: DEFAULT exists but does not match
+                if ($scol->{atthasdef} and $fcol->{atthasdef} and $scol->{def} ne $fcol->{def}) {
+                    ## Make an exception for Postgres versions returning DEFAULT parenthesized or not
+                    ## e.g. as "-5" in 8.2 or as "(-5)" in 8.3
+                    my $scol_def = $scol->{def};
+                    my $fcol_def = $fcol->{def};
+                    for ($scol_def, $fcol_def) {
+                        s/\A\(//;
+                        s/\)\z//;
+                        s/\)::/::/;
 
-    if ($Database->{does_sql}) {
-        if ($Database->{does_savepoints}) {
-            $Database->{dbh}->do('SAVEPOINT truncate_attempt');
+                        ## Also make exceptions for DEFAULT casting text to integers/numerics
+                        s/^'(-?\d+(?:\.\d+)?)'\s*::\s*(?:integer|numeric).*$/\$1/i;
+                    }
+                    my $msg;
+                    if ($scol_def eq $fcol_def) {
+                        $msg = q{Postgres version mismatch leads to this difference, which is being tolerated: };
+                    }
+                    else {
+                        $column_problems ||= 1; ## Don't want to override a setting of "2"
+                        $msg = '';
+                    }
+                    $msg .= qq{Source database for sync "$syncname" has column "$colname" of table "$t" with a DEFAULT of "$scol->{def}", but target database "$dbname" has a DEFAULT of "$fcol->{def}"};
+                    $self->glog("Warning: $msg", LOG_WARN);
+                    warn $msg;
+                }
+
+                ## Fatal in strict mode: order of columns does not match up
+                if ($scol->{realattnum} != $fcol->{realattnum}) {
+                    $column_problems ||= 1; ## Don't want to override a setting of "2"
+                    my $msg = qq{Source database for sync "$syncname" has column "$colname" of table "$t" at position $scol->{realattnum} ($scol->{attnum}), but target database "$dbname" has it in position $fcol->{realattnum} ($fcol->{attnum})};
+                    $self->glog("Warning: $msg", LOG_WARN);
+                    warn $msg;
+                }
+
+            } ## end each column to be checked
+
+            ## Fatal in strict mode: extra columns on the target side
+            for my $colname (sort keys %$targetcolinfo) {
+                next if exists $colinfo->{$colname};
+                $column_problems ||= 1; ## Don't want to override a setting of "2"
+                my $msg = qq{Target database has column "$colname" on table "$t", but source database does not};
+                $self->glog("Warning: $msg", LOG_WARN);
+                warn $msg;
+            }
+
+            ## Real serious problems always bail out
+            # FIXME: ami - disabled this because cross-schema replication results
+            # in _many_ validation issues.  The right answer is to fix the validation.
+            #
+            #return 0 if $column_problems >= 2;
+            if ($using_customname and $column_problems > 2) {
+                $self->glog("Would have bailed due to $column_problems column problems.");
+            }
+
+            ## If this is a minor problem, and we are using a customname,
+            ## allow it to pass
+            $column_problems = 0 if $using_customname;
+
+            ## If other problems, only bail if strict checking is on both sync and goat
+            ## This allows us to make a sync strict, but carve out exceptions for goats
+            return 0 if $column_problems and $s->{strict_checking} and $g->{strict_checking};
+
+        } ## end each target database
+
+    } ## end each goat
+
+    ## Generate mapping of foreign keys
+    ## This helps us with conflict resolution later on
+    my $oidlist = join ',' => map { $_->{oid} } @{ $s->{goatlist} };
+    if ($oidlist) {
+
+        ## Postgres added the array_agg function in 8.3, so if this is older than that,
+        ## we add our own copy
+        my $arrayagg = 'array_agg';
+        if ($srcdbh->{pg_server_version} < 80300) {
+
+            ## We reset the search_path below, so we need to force the query below to use the public namespace
+            $arrayagg = 'public.array_agg';
+
+            ## Searching for the proname rather than the aggregate should be good enough
+            $SQL = 'SELECT proname FROM pg_proc WHERE proname ~ ?';
+            $sth = $srcdbh->prepare($SQL);
+            $count = $sth->execute('array_agg');
+            $sth->finish();
+            if ($count < 1) {
+                $SQL = q{CREATE AGGREGATE array_agg(anyelement) ( SFUNC=array_append, STYPE=anyarray, INITCOND='{}')};
+                $srcdbh->do($SQL);
+            }
         }
-        $SQL = sprintf 'TRUNCATE TABLE %s%s',
-        $tablename,
-        ($does_cascade and $Database->{does_cascade}) ? ' CASCADE' : '';
-        my $truncate_ok = 0;
 
-        eval {
-            $Database->{dbh}->do($SQL);
-            $truncate_ok = 1;
+        $SQL = qq{SELECT conname,
+                    conrelid, conrelid::regclass,
+                    confrelid, confrelid::regclass,
+                    $arrayagg(a.attname), $arrayagg(z.attname)
+             FROM pg_constraint c
+             JOIN pg_attribute a ON (a.attrelid = conrelid AND a.attnum = ANY(conkey))
+             JOIN pg_attribute z ON (z.attrelid = confrelid AND z.attnum = ANY (confkey))
+             WHERE contype = 'f'
+             AND (conrelid IN ($oidlist) OR confrelid IN ($oidlist))
+             GROUP BY 1,2,3,4,5
         };
-        if (! $truncate_ok) {
-            $Database->{does_savepoints} and $Database->{dbh}->do('ROLLBACK TO truncate_attempt');
-            $self->glog("Truncate error for db $Database->{name}.$Database->{dbname}.$tablename: $@", LOG_NORMAL);
-            return 0;
-        }
-        else {
-            $Database->{does_savepoints} and $Database->{dbh}->do('RELEASE truncate_attempt');
-            return 1;
-        }
-    }
 
-    if ('mongo' eq $Database->{dbtype}) {
-        my $collection = $Database->{dbh}->get_collection($tablename);
-        $self->{oldmongo} ? $collection->remove({}, { safe => 1} ): $collection->delete_many({}, { safe => 1} );
-        return 1;
-    }
-
-    elsif ('redis' eq $Database->{dbtype}) {
-        ## No real equivalent here, as we do not map tables 1:1 to redis keys
-        ## In theory, we could walk through all keys and delete ones that match the table
-        ## We will hold off until someone actually needs that, however :)
-        return 1;
-    }
-
-    return undef;
-
-} ## end of truncate_table
-
-
-sub delete_table {
-
-    ## Given a table, attempt to unconditionally delete rows from it
-    ## Arguments: two
-    ## 1. Database object
-    ## 2. Table object
-    ## Returns: number of rows deleted
-
-    my ($self, $d, $Table) = @_;
-
-    my $tablename = exists $Table->{tablename} ? $Table->{tablename} : "$Table->{safeschema}.$Table->{safetable}";
-
-    my $count = 0;
-
-    if ($d->{does_sql}) {
-        ($count = $d->{dbh}->do("DELETE FROM $tablename")) =~ s/0E0/0/o;
-    }
-    elsif ('mongo' eq $d->{dbtype}) {
-        ## Same as truncate, really, except we return the number of rows
-        my $collection = $d->{dbh}->get_collection($tablename);
-        if ($self->{oldmongo}) {
-            my $res = $collection->remove({}, { safe => 1} );
-            $count = $res->{n};
-        }
-        else {
-            my $res = $collection->delete_many({}, { safe => 1} );
-            $count = $res->{deleted_count};
-        }
-    }
-    elsif ('redis' eq $d->{dbtype}) {
-        ## Nothing relevant here, as the table is only part of the key name
-    }
-    else {
-        die "Do not know how to delete a dbtype of $d->{dbtype}";
-    }
-
-    return $count;
-
-} ## end of delete_table
-
-
-sub delete_rows {
-
-    ## Given a list of rows, delete them from a table in one or more databases
-    ## Arguments: four
-    ## 1. Hashref of rows to delete, where the keys are the primary keys (\0 joined if multi).
-    ## 2. Table object
-    ## 3. Sync object
-    ## 4. Target database object (or an arrayref of the same)
-    ## Returns: number of rows deleted
-
-    my ($self,$rows,$Table,$Sync,$TargetDB) = @_;
-
-    ## Have we already truncated this table? If yes, skip and reset the flag
-    if (exists $Table->{truncatewinner}) {
-        return 0;
-    }
-
-    my ($S,$T) = ($Table->{safeschema},$Table->{safetable});
-
-    my $syncname = $Sync->{name};
-       my $pkcols = $Table->{pkeycols};
-       my $pkcolsraw = $Table->{pkeycolsraw};
-
-    ## Ensure the target database argument is always an array
+        ## We turn off search_path to get fully-qualified relation names
+        $srcdbh->do('SET LOCAL search_path = pg_catalog');
     if (ref $TargetDB ne 'ARRAY') {
         $TargetDB = [$TargetDB];
     }
@@ -9455,93 +9457,93 @@ sub delete_rows {
 
     my $done = 0;
     my $did_something;
-    while (!$done) {
+    $0 = "Bucardo Master Control Program v$VERSION.$self->{extraname} Active syncs: ";
+    $0 .= join ',' => @activesyncs;
 
-        $did_something = 0;
+    return 1;
 
-        ## Wrap up any async targets that have finished
-        for my $Target (@$TargetDB) {
-            next if ! $Target->{async_active} or $Target->{delete_complete};
-            if ('postgres' eq $Target->{dbtype}) {
-                if ($Target->{dbh}->pg_ready) {
-                    ## If this was a do(), we already have the number of rows
-                    if (1 == $numpks) {
-                        $Target->{deleted_rows} += $Target->{dbh}->pg_result();
-                    }
-                    else {
-                        $Target->{dbh}->pg_result();
-                    }
-                    $Target->{async_active} = 0;
-                }
-            }
-            ## Don't need to check for invalid types: happens on the kick off below
+} ## end of deactivate_sync
+
+
+sub fork_controller {
+
+    ## Fork off a controller process
+    ## Arguments: two
+    ## 1. Hashref of sync information
+    ## 2. The name of the sync
+    ## Returns: undef
+
+    my ($self, $s, $syncname) = @_;
+
+    my $newpid = $self->fork_and_inactivate('CTL');
+
+    if ($newpid) { ## We are the parent
+        $self->glog(qq{Created controller $newpid for sync "$syncname". Kick is $s->{kick_on_startup}}, LOG_NORMAL);
+        $s->{controller} = $newpid;
+        $self->{pidmap}{$newpid} = 'CTL';
+
+        ## Reset counters for ctl restart via maxkicks and lifetime settings
+        $s->{ctl_kick_counts} = 0;
+        $s->{start_time} = time();
+
+        return;
+    }
+
+    ## We are the kid, aka the new CTL process
+
+    ## Sleep a hair so the MCP can finish the items above first
+    sleep 0.05;
+
+    ## No need to keep information about other syncs around
+    $self->{sync} = $s;
+
+    $self->start_controller($s);
+
+    exit 0;
+
+} ## end of fork_controller
+
+
+sub fork_and_inactivate {
+
+    ## Call fork, and immediately inactivate open database handles
+    ## Arguments: one
+    ## 1. Type of thing we are forking (VAC, CTL, KID)
+    ## Returns: nothing
+
+    my $self = shift;
+    my $type = shift || '???';
+
+    my $newpid = fork;
+    if (!defined $newpid) {
+        die qq{Warning: Fork for $type failed!\n};
+    }
+
+    if ($newpid) { ## Parent
+        ## Very slight sleep to increase the chance of something happening to the kid
+        ## before InactiveDestroy is set
+        sleep 0.1;
+    }
+    else { ## Kid
+        ## Walk through the list of all known DBI databases
+        ## Inactivate each one, then undef it
+
+        ## Change to a better prefix, so 'MCP' does not appear in the logs
+        $self->{logprefix} = $type;
+
+        ## It is probably still referenced elsewhere, so handle that - how?
+        for my $iname (keys %{ $self->{dbhlist} }) {
+            my $ldbh = $self->{dbhlist}{$iname};
+            $self->glog("Inactivating dbh $iname post-fork", LOG_DEBUG2);
+            $ldbh->{InactiveDestroy} = 1;
+            delete $self->{dbhlist}{$iname};
         }
+        ## Now go through common shared database handle locations, and delete them
+        $self->{masterdbh}->{InactiveDestroy} = 1
+            if $self->{masterdbh};
+        delete $self->{masterdbh};
 
-        ## Kick off all dormant async targets
-        for my $Target (@$TargetDB) {
-
-            ## Skip if this target does not support async, or is in the middle of a query
-            next if ! $Target->{does_async} or $Target->{async_active} or $Target->{delete_complete};
-
-            ## The actual target name
-            my $target_tablename = $customname->{$Target->{name}};
-
-            if ('postgres' eq $Target->{dbtype}) {
-
-                ## Which chunk we are processing.
-                $Target->{delete_round}++;
-                if ($Target->{delete_round} > $Target->{delete_rounds}) {
-                    $Target->{delete_complete} = 1;
-                    next;
-                }
-                my $dbname = $Target->{name};
-                $self->glog("Deleting from target $dbname.$target_tablename (round $Target->{delete_round} of $Target->{delete_rounds})", LOG_DEBUG);
-
-                $did_something++;
-
-                ## Single primary key, so delete using the ANY(?) format
-                if (1 == $numpks) {
-                    ## Use the or-equal so we only prepare this once
-                    $Target->{delete_sth} ||= $Target->{dbh}->prepare("$SQL{ANY}{$target_tablename}", { pg_async => PG_ASYNC });
-                    $Target->{delete_sth}->execute($SQL{ANYargs}->[$Target->{delete_round}-1]);
-                }
-                ## Multiple primary keys, so delete old school via IN ((x,y),(a,b))
-                else {
-                    my $pre = $Target->{delete_rounds} > 1 ? "/* $Target->{delete_round} of $Target->{delete_rounds} */ " : '';
-                    ## The pg_direct tells DBD::Pg there are no placeholders, and to use PQexec directly
-                    $Target->{deleted_rows} += $Target->{dbh}->
-                        do($pre.$SQL{IN}{$target_tablename}->[$Target->{delete_round}-1], { pg_async => PG_ASYNC, pg_direct => 1 });
-                }
-
-                $Target->{async_active} = time;
-            } ## end postgres
-            else {
-                die qq{Do not know how to do async for type $Target->{dbtype}!\n};
-            }
-
-        } ## end all async targets
-
-        ## Kick off a single non-async target
-        for my $Target (@$TargetDB) {
-
-            ## Skip if this target is async, or has no more rounds
-            next if $Target->{does_async} or $Target->{delete_complete};
-
-            $did_something++;
-
-            my $type = $Target->{dbtype};
-
-            ## The actual target name
-            my $target_tablename = $customname->{$Target->{name}};
-
-            $self->glog("Deleting from target $target_tablename (type=$type)", LOG_DEBUG);
-
-            if ('firebird' eq $type) {
-                $target_tablename = qq{"$target_tablename"} if $target_tablename !~ /"/;
-            }
-
-            if ('mongo' eq $type) {
-
+        ## Clear the 'sdb' structure of any existing database handles
                 ## Set the collection
                 $Target->{collection} = $Target->{dbh}->get_collection($target_tablename);
 
@@ -10537,4 +10539,3 @@ Copyright (c) 2005-2017 Greg Sabino Mullane <greg@endpoint.com>.
 
 This software is free to use: see the LICENSE file for details.
 
-=cut
