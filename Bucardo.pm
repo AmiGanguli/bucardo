@@ -8993,7 +8993,7 @@ sub adjust_sequence {
             $SQL = "ALTER SEQUENCE $ST ";
             $SQL .= join ' ' => @alter;
             $self->glog("Running on target $dbname: $SQL", LOG_DEBUG);
-            $d->{dbh}->do($SQL);
+            $d->{dbh}->do($SQL) or $self->glog("ERROR altering sequence " . $d->{dbh}->err() . " " . $d->{dbh}->errstr(), LOG_NORMAL);
         }
 
     } ## end each database
